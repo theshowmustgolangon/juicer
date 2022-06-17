@@ -146,7 +146,7 @@ genomePath=/lustre/isaac/proj/UTHSC0013/panjun_work/refs/rn7_ucsc/bwa_rn7chr/rn7
 ## Alignment checks; not necessary if later stages ############
 ###############################################################
 
-# reference check
+# reference check for aligning step
 if [[ -z "$chimeric" && -z "$merge" &&  -z "$final" && -z "$dedup" && -z "$postproc" && -z "$afterdedup" ]] 
 then
     ## Check that refSeq exists 
@@ -369,105 +369,124 @@ ${juiceDir}/scripts/juicer_tools -V 2>&1 | awk '\\\$1=="Juicer" && \\\$2=="Tools
 
 #############################################################################################
 #############################################################################################
-# Not in merge, dedup,  or final stage, i.e. need to split and align files.
+## Not in merge, dedup,  or final stage, i.e. need to split and align files. ################
 #############################################################################################
 #############################################################################################
 if [ -z $merge ] && [ -z $final ] && [ -z $dedup ] && [ -z $postproc ] && [ -z $afterdedup ]
 then
+	##############################
+	###### About frag START ######
+	##############################
     if [ "$nofrag" -eq 0 ]
     then
-	echo -e "(-: Aligning files matching $fastqdir\n in queue $queue to genome $refSeq with site file $site_file"
+		echo -e "(-: Aligning files matching $fastqdir\n in queue $queue to genome $refSeq with site file $site_file"
     else
         echo -e "(-: Aligning files matching $fastqdir\n in queue $queue to genome $refSeq with no fragment delimited maps."
     fi
-    
+	##############################
+	###### About frag END ########
+	##############################
+
+    ###### About split START ######
     ## Split fastq files into smaller portions for parallelizing alignment 
     ## Do this by creating a text script file for the job on STDIN and then 
     ## sending it to the cluster	
     dependsplit="afterok"
+	# SPLITEXISTS START
     if [ ! $splitdirexists ]
+	# SPLITEXISTS THEN START
     then
-	echo "(-: Created $splitdir for splitting jobs." 
-	echo "And output directory for aligning: $outputdir."
-	if [ -n "$splitme" ]
-        then
-            for i in ${fastqdir}
-            do
-		filename=$(basename $i)
-		filename=${filename%.*}      
-                if [ -z "$gzipped" ]
-                then	
-		    jid=`sbatch <<- SPLITEND | egrep -o -e "\b[0-9]+$"
-			#!/bin/bash -l
-                        #SBATCH -p $queue
-			#SBATCH -t $queue_time
-			#SBATCH -c 1
-			#SBATCH --mem=5G
-			#SBATCH -o $debugdir/split-%j.out
-			#SBATCH -e $debugdir/split-%j.err
-			#SBATCH -J "${groupname}_split_${i}"
-                        $userstring			
-			date
-			echo "Split file: $filename"
-			split -a 3 -l $splitsize -d --additional-suffix=.fastq $i $splitdir/$filename
-			date
-SPLITEND`
+		echo "(-: Created $splitdir for splitting jobs." 
+		echo "And output directory for aligning: $outputdir."
+	
+		# splitme START
+		if [ -n "$splitme" ]
+			# splitme THEN START
+			then
+				for i in ${fastqdir}
+				do  # DO START
+			filename=$(basename $i)
+			filename=${filename%.*}      
+					if [ -z "$gzipped" ] # GZIPPED START
+					then	
+						jid=`sbatch <<- SPLITEND | egrep -o -e "\b[0-9]+$"
+						#!/bin/bash -l
+									#SBATCH -p $queue
+						#SBATCH -t $queue_time
+						#SBATCH -c 1
+						#SBATCH --mem=5G
+						#SBATCH -o $debugdir/split-%j.out
+						#SBATCH -e $debugdir/split-%j.err
+						#SBATCH -J "${groupname}_split_${i}"
+									$userstring			
+						date
+						echo "Split file: $filename"
+						split -a 3 -l $splitsize -d --additional-suffix=.fastq $i $splitdir/$filename
+						date
+			SPLITEND`
+					else # GZIPPED ELSE
+						jid=`sbatch <<- SPLITEND | egrep -o -e "\b[0-9]+$"
+						#!/bin/bash -l
+						#SBATCH -p $queue
+						#SBATCH -t $queue_time
+						#SBATCH -c 1
+						#SBATCH --mem=5G
+						#SBATCH -o $debugdir/split-%j.out
+						#SBATCH -e $debugdir/split-%j.err
+						#SBATCH -J "${groupname}_split_${i}"
+									$userstring			
+						date
+						echo "Split file: $filename"
+						zcat $i | split -a 3 -l $splitsize -d --additional-suffix=.fastq - $splitdir/$filename
+						date
+			SPLITEND`
+					fi 
+					# GZIPPED END
 
+			dependsplit="$dependsplit:$jid"
+					# if we split files, the splits are named .fastq
+					read1=${splitdir}"/*${read1str}*.fastq"
+				done 
+				# DO DONE
+			
+				srun -c 1 -p "$queue" -t 1 -o $debugdir/wait-%j.out -e $debugdir/wait-%j.err -d $dependsplit -J "${groupname}_wait" sleep 1
+			
+			# splitme ELSE START
+			else
+				cp -rs ${fastqdir} ${splitdir}
+				wait
+			fi
+			# splitme END
 
-
-		else
-		    jid=`sbatch <<- SPLITEND | egrep -o -e "\b[0-9]+$"
-			#!/bin/bash -l
-			#SBATCH -p $queue
-			#SBATCH -t $queue_time
-			#SBATCH -c 1
-			#SBATCH --mem=5G
-			#SBATCH -o $debugdir/split-%j.out
-			#SBATCH -e $debugdir/split-%j.err
-			#SBATCH -J "${groupname}_split_${i}"
-                        $userstring			
-			date
-			echo "Split file: $filename"
-			zcat $i | split -a 3 -l $splitsize -d --additional-suffix=.fastq - $splitdir/$filename
-			date
-SPLITEND`
-
-
-
-		fi
-		dependsplit="$dependsplit:$jid"
-                # if we split files, the splits are named .fastq
-                read1=${splitdir}"/*${read1str}*.fastq"
-	    done
-	    
-	    srun -c 1 -p "$queue" -t 1 -o $debugdir/wait-%j.out -e $debugdir/wait-%j.err -d $dependsplit -J "${groupname}_wait" sleep 1
-        else
-            cp -rs ${fastqdir} ${splitdir}
-            wait
-        fi
+	# SPLITEXISTS ELSE START
     else
         ## No need to re-split fastqs if they already exist
         echo -e "---  Using already created files in $splitdir\n"
-	# unzipped files will have .fastq extension, softlinked gz 
+		# unzipped files will have .fastq extension, softlinked gz 
         testname=$(ls -lgG ${splitdir} | awk '$7~/fastq$/||$7~/gz$/{print $7; exit}')
 
-##################################################################################
-	if [[ -z "$chimeric" ]]
-	then
-            if [[ ${testname: -3} == ".gz" ]]
-            then
-		read1=${splitdir}"/*${read1str}*.fastq.gz"
-            else
-		read1=${splitdir}"/*${read1str}*.fastq"
-            fi
-	fi
+    	###### CHIMERIC START ######
+		if [[ -z "$chimeric" ]]
+		then
+			if [[ ${testname: -3} == ".gz" ]]
+			then
+				read1=${splitdir}"/*${read1str}*.fastq.gz"
+			else
+				read1=${splitdir}"/*${read1str}*.fastq"
+			fi
+		fi
+    	###### CHIMERIC END ######
+
     fi
+	# SPLITEXISTS END
     
+   
     ## Launch job. Once split/move is done, set the parameters for the launch. 
     echo "(-: Starting job to launch other jobs once splitting is complete"
     
-##################################################################################
-
+	##################################################################################
+	##################################################################################
+	##################################################################################
 
     ## Loop over all read1/read2 fastq files and create jobs for aligning.
     ## Then call chimeric script on aligned, sort individual
@@ -480,41 +499,45 @@ SPLITEND`
 
     dependmerge="afterok"
 
+	###########################################
+	## For Loop ###############################
+	###########################################
     for i in ${read1}
     do
-	ext=${i#*$read1str}
-	name=${i%$read1str*} 
-	# these names have to be right or it'll break
-	name1=${name}${read1str}
-	name2=${name}${read2str}	
-	jname=$(basename "$name")${ext}
+		ext=${i#*$read1str}
+		name=${i%$read1str*} 
+		# these names have to be right or it'll break
+		name1=${name}${read1str}
+		name2=${name}${read2str}	
+		jname=$(basename "$name")${ext}
+
+		# SINGLE-END START
+		# RG group; ID derived from paired-end name, sample and library can be user set
+		if [ $singleend -eq 1 ]
+		then
+			rg="@RG\\tID:${jname%%.fastq*}\\tSM:${sampleName}\\tPL:LS454\\tLB:${libraryName}"
+		else
+			#####################################################
+			## our case: paired-end
+			#####################################################
+			rg="@RG\\tID:${jname%%.fastq*}\\tSM:${sampleName}\\tPL:ILM\\tLB:${libraryName}"
+		fi
+		# SINGLE-END END
+
+		touchfile=${tmpdir}/${jname}
 
 
-	# RG group; ID derived from paired-end name, sample and library can be user set
-	if [ $singleend -eq 1 ]
-	then
-	    rg="@RG\\tID:${jname%%.fastq*}\\tSM:${sampleName}\\tPL:LS454\\tLB:${libraryName}"
-	else
-		#####################################################
-		## our case: paired-end
-		#####################################################
-	    rg="@RG\\tID:${jname%%.fastq*}\\tSM:${sampleName}\\tPL:ILM\\tLB:${libraryName}"
-	fi
-
-	touchfile=${tmpdir}/${jname}
-
-	###########################################
-	## Aligning
-	###########################################
-
+	########################################################################
+	# chimeric start #######################################################
+	########################################################################
 	if [ -z "$chimeric" ]
 		## NOTchimeric
 	then
-            usegzip=0
-            if [ "${ext: -3}" == ".gz" ]
-            then
-		usegzip=1
-	    fi
+		usegzip=0
+		if [ "${ext: -3}" == ".gz" ]
+		then
+			usegzip=1
+		fi
 
 	    # count ligations
 	    jid=`sbatch <<- CNTLIG |  egrep -o -e "\b[0-9]+$"
@@ -532,18 +555,7 @@ SPLITEND`
 		export usegzip=${usegzip}; export name=${name}; export name1=${name1}; export name2=${name2}; export ext=${ext}; export ligation=${ligation}; export singleend=${singleend}; ${juiceDir}/scripts/countligations.sh
 		date
 CNTLIG`
-
-
-
 	    dependcount="$jid"
-
-
-
-
-
-##### WORKING
-
-
 
 	    # align fastqs
 
@@ -552,6 +564,7 @@ CNTLIG`
 		#    conda activate
 		# fi
 
+		##############SINGLE END START#####################
 		if [ $singleend -eq 1 ]
 		then
 		   if [ "$methylation" = 1 ]
@@ -562,7 +575,7 @@ CNTLIG`
 		   else
 			echo "Running command bwa mem -5M $threadstring -R $rg $refSeq $name1$ext > $name$ext.sam"
 			bwa mem -5M $threadstring -R '$rg' $refSeq $name1$ext > $name$ext.sam 
-                   fi
+           fi
 		else # we are using paired-end
 		   if [ "$methylation" = 1 ]
 		   then
@@ -578,6 +591,10 @@ CNTLIG`
 			bwa mem -SP5M $threadstring -R '$rg' $refSeq $name1$ext $name2$ext > $name$ext.sam
 		   fi
 		fi
+		##############SINGLE END END#####################
+
+
+		###################################
 		if [ \$? -ne 0 ]
 		then  
 		       touch $errorfile
@@ -585,11 +602,11 @@ CNTLIG`
 		else
 		       echo "(-: Mem align of $name$ext.sam done successfully"
 		fi
+		###################################
+
 		date
 ALGNR1`
 	    dependalign="afterok:$jid:$dependcount"
-	
-	
 	
 	else  
 	    name=${i%.sam}
@@ -617,7 +634,13 @@ CNTLINE`
 
 	    dependalign="afterok:$jid"
 	fi
+	########################################################################
+	# chimeric ####### END #################################################
+	########################################################################
 
+	########################################################################
+	# site_file ####### START ##############################################
+	########################################################################
 	# wait for alignment, chimeric read handling
 	if [ "$site" != "none" ] && [ -e "$site_file" ] 
 	then		
@@ -637,124 +660,118 @@ CNTLINE`
 		${load_awk}
 
 		date
+
+		
 		if [ $singleend -eq 1 ]
 		then
 		    time awk -v stem=${name}${ext}_norm -v site_file=$site_file -v singleend=$singleend -f $juiceDir/scripts/chimeric_sam.awk $name$ext.sam > $name$ext.sam3
 		else
 		    time awk -v stem=${name}${ext}_norm -v site_file=$site_file -f $juiceDir/scripts/chimeric_sam.awk $name$ext.sam > $name$ext.sam3
 		fi
+
+
 		date
 MRGALL`
 
-
-
-
-
-
 	    dependalign="afterok:$jid"
+	
+	########################################################################
+	# site_file ####### ELSE ##############################################
+	########################################################################
 	else
+		# single end start ########################################################
 	    if [ $singleend -eq 1 ]
 	    then
-		jid=`sbatch <<- MRGALL1 | egrep -o -e "\b[0-9]+$"
-		#!/bin/bash -l
-		#SBATCH -p $long_queue
-		#SBATCH -o $debugdir/merge1-%j.out
-		#SBATCH -e $debugdir/merge1-%j.err
-		#SBATCH --mem=10G
-		#SBATCH -t $long_queue_time
-		#SBATCH -c 1
-		#SBATCH --ntasks=1
-		#SBATCH -d $dependalign
-		#SBATCH -J "${groupname}_merge_${jname}"
-                #SBATCH --threads-per-core=1
-                $userstring
-		${load_awk}
-		#time awk -v maxcount=1000000 -f $juiceDir/scripts/calculate_insert_size.awk $name$ext.sam > $name$ext.insert_size
-		#will need to combine chimeric_sam and adjust_insert_size 
-		time awk -v stem=${name}${ext}_norm -v singleend=$singleend -f $juiceDir/scripts/chimeric_sam.awk $name$ext.sam > $name$ext.sam3
+			jid=`sbatch <<- MRGALL1 | egrep -o -e "\b[0-9]+$"
+			#!/bin/bash -l
+			#SBATCH -p $long_queue
+			#SBATCH -o $debugdir/merge1-%j.out
+			#SBATCH -e $debugdir/merge1-%j.err
+			#SBATCH --mem=10G
+			#SBATCH -t $long_queue_time
+			#SBATCH -c 1
+			#SBATCH --ntasks=1
+			#SBATCH -d $dependalign
+			#SBATCH -J "${groupname}_merge_${jname}"
+					#SBATCH --threads-per-core=1
+					$userstring
+			${load_awk}
+			#time awk -v maxcount=1000000 -f $juiceDir/scripts/calculate_insert_size.awk $name$ext.sam > $name$ext.insert_size
+			#will need to combine chimeric_sam and adjust_insert_size 
+			time awk -v stem=${name}${ext}_norm -v singleend=$singleend -f $juiceDir/scripts/chimeric_sam.awk $name$ext.sam > $name$ext.sam3
 MRGALL1`
-
-
-
-
-
-		dependalign="afterok:$jid"
+			dependalign="afterok:$jid"
 	    else
-		jid=`sbatch <<- MRGALL1 | egrep -o -e "\b[0-9]+$"
-		#!/bin/bash -l
-		#SBATCH -p $long_queue
-		#SBATCH -o $debugdir/merge1-%j.out
-		#SBATCH -e $debugdir/merge1-%j.err
-		#SBATCH --mem=10G
-		#SBATCH -t $long_queue_time
-		#SBATCH -c 1
-		#SBATCH --ntasks=1
-		#SBATCH -d $dependalign
-		#SBATCH -J "${groupname}_merge_${jname}"
-                #SBATCH --threads-per-core=1
-                $userstring
-		${load_awk}
-		#time awk -v maxcount=1000000 -f $juiceDir/scripts/calculate_insert_size.awk $name$ext.sam > $name$ext.insert_size
-		#will need to combine chimeric_sam and adjust_insert_size 
-		time awk -v stem=${name}${ext}_norm -f $juiceDir/scripts/chimeric_sam.awk $name$ext.sam > $name$ext.sam2
+
+			jid=`sbatch <<- MRGALL1 | egrep -o -e "\b[0-9]+$"
+			#!/bin/bash -l
+			#SBATCH -p $long_queue
+			#SBATCH -o $debugdir/merge1-%j.out
+			#SBATCH -e $debugdir/merge1-%j.err
+			#SBATCH --mem=10G
+			#SBATCH -t $long_queue_time
+			#SBATCH -c 1
+			#SBATCH --ntasks=1
+			#SBATCH -d $dependalign
+			#SBATCH -J "${groupname}_merge_${jname}"
+					#SBATCH --threads-per-core=1
+					$userstring
+			${load_awk}
+			#time awk -v maxcount=1000000 -f $juiceDir/scripts/calculate_insert_size.awk $name$ext.sam > $name$ext.insert_size
+			#will need to combine chimeric_sam and adjust_insert_size 
+			time awk -v stem=${name}${ext}_norm -f $juiceDir/scripts/chimeric_sam.awk $name$ext.sam > $name$ext.sam2
 MRGALL1`
+			dependalign="afterok:$jid"
+			jid=`sbatch <<- MRGALL3 | egrep -o -e "\b[0-9]+$"
+			#!/bin/bash -l
+			#SBATCH -p $long_queue
+			#SBATCH -o $debugdir/merge2-%j.out
+			#SBATCH -e $debugdir/merge2-%j.err
+			#SBATCH --mem=10G
+			#SBATCH -t $long_queue_time
+			#SBATCH -c 1
+			#SBATCH --ntasks=1
+			#SBATCH -d $dependalign
+			#SBATCH -J "${groupname}_merge_${jname}"
+					#SBATCH --threads-per-core=1
+					$userstring
+			${load_awk}
 
-
-
-		dependalign="afterok:$jid"
-		jid=`sbatch <<- MRGALL3 | egrep -o -e "\b[0-9]+$"
-		#!/bin/bash -l
-		#SBATCH -p $long_queue
-		#SBATCH -o $debugdir/merge2-%j.out
-		#SBATCH -e $debugdir/merge2-%j.err
-		#SBATCH --mem=10G
-		#SBATCH -t $long_queue_time
-		#SBATCH -c 1
-		#SBATCH --ntasks=1
-		#SBATCH -d $dependalign
-		#SBATCH -J "${groupname}_merge_${jname}"
-                #SBATCH --threads-per-core=1
-                $userstring
-		${load_awk}
-
-		time awk -v avgInsertFile=${name}${ext}_norm.txt.res.txt -f $juiceDir/scripts/adjust_insert_size.awk $name$ext.sam2 > $name$ext.sam3
+			time awk -v avgInsertFile=${name}${ext}_norm.txt.res.txt -f $juiceDir/scripts/adjust_insert_size.awk $name$ext.sam2 > $name$ext.sam3
 MRGALL3`
-
-
-
-
-		dependalign="afterok:$jid"
+			dependalign="afterok:$jid"
 	    fi
+		# Singleend END ########################################################
 	fi
+	########################################################################
+	# site_file ####### END ################################################
+	########################################################################
 	
 	jid2=`sbatch <<- MRGALL2 | egrep -o -e "\b[0-9]+$"
-#!/bin/bash -l
-#SBATCH -p $long_queue
-#SBATCH -o $debugdir/mergesort-%j.out
-#SBATCH -e $debugdir/mergesort-%j.err
-#SBATCH --mem-per-cpu=2G
-#SBATCH -t $long_queue_time
-#SBATCH -c $sortthreads
-#SBATCH --ntasks=1
-#SBATCH -d $dependalign 
-#SBATCH -J "${groupname}_mergesort_${jname}"
-#SBATCH --threads-per-core=1 
-$userstring
-${load_samtools}
-#we should probably set the -m based on memory / num of threads
-if time samtools sort -t cb -n -O SAM -@ $sortthreads -l 0 -m 2G $name$ext.sam3 >  ${name}${ext}.sam
-then
-   rm -f $name$ext.sam2 $name$ext.sam3
-   touch $touchfile
-else
-   echo "***! Failure during chimera handling of $name${ext}"
-   touch $errorfile
-   exit 1
-fi
+	#!/bin/bash -l
+	#SBATCH -p $long_queue
+	#SBATCH -o $debugdir/mergesort-%j.out
+	#SBATCH -e $debugdir/mergesort-%j.err
+	#SBATCH --mem-per-cpu=2G
+	#SBATCH -t $long_queue_time
+	#SBATCH -c $sortthreads
+	#SBATCH --ntasks=1
+	#SBATCH -d $dependalign 
+	#SBATCH -J "${groupname}_mergesort_${jname}"
+	#SBATCH --threads-per-core=1 
+	$userstring
+	${load_samtools}
+	#we should probably set the -m based on memory / num of threads
+	if time samtools sort -t cb -n -O SAM -@ $sortthreads -l 0 -m 2G $name$ext.sam3 >  ${name}${ext}.sam
+	then
+	rm -f $name$ext.sam2 $name$ext.sam3
+	touch $touchfile
+	else
+	echo "***! Failure during chimera handling of $name${ext}"
+	touch $errorfile
+	exit 1
+	fi
 MRGALL2`
-
-
-
 
 	dependmerge="${dependmerge}:${jid2}"
 	ARRAY[countjobs]="${groupname}_mergesort_${jname}"
@@ -763,45 +780,62 @@ MRGALL2`
         countjobs=$(( $countjobs + 1 ))
 
     done # done looping over all fastq split files
+	###########################################
+	## For Loop DONE ##########################
+	###########################################
+
     
+	#################################################
+	# listing do START
+	#################################################
     # list of all jobs. print errors if failed    
     for (( i=0; i < $countjobs; i++ ))
     do
-	f=${TOUCH[$i]}
-	msg="***! Error in job ${ARRAY[$i]}  Type squeue -j ${JIDS[$i]} to see what happened"
-	
-	# check that alignment finished successfully
-	jid=`sbatch <<- EOF
-		#!/bin/bash -l
-		#SBATCH -o $debugdir/aligncheck-%j.out
-		#SBATCH -e $debugdir/aligncheck-%j.err
-		#SBATCH -t $queue_time
-		#SBATCH -p $queue
-		#SBATCH -J "${groupname}_check"
-		#SBATCH -d $dependmerge
-                $userstring			
+		f=${TOUCH[$i]}
+		msg="***! Error in job ${ARRAY[$i]}  Type squeue -j ${JIDS[$i]} to see what happened"
+		
+		# check that alignment finished successfully
+		jid=`sbatch <<- EOF
+			#!/bin/bash -l
+			#SBATCH -o $debugdir/aligncheck-%j.out
+			#SBATCH -e $debugdir/aligncheck-%j.err
+			#SBATCH -t $queue_time
+			#SBATCH -p $queue
+			#SBATCH -J "${groupname}_check"
+			#SBATCH -d $dependmerge
+					$userstring			
 
-		date
-		echo "Checking $f"
-		if [ ! -e $f ]
-		then
-			echo $msg
-			touch $errorfile
-		fi
-		date
-EOF`
+			date
+			echo "Checking $f"
+			
+			if [ ! -e $f ]
+			then
+				echo $msg
+				touch $errorfile
+			fi
+			date
 
+	EOF`
 
-
-	jid=$(echo $jid | egrep -o -e "\b[0-9]+$")
-	dependmergecheck="${dependmerge}:${jid}"
+		jid=$(echo $jid | egrep -o -e "\b[0-9]+$")
+		dependmergecheck="${dependmerge}:${jid}"
     done
+	#################################################
+	# listing done
+	#################################################
+
 fi  
+
 #############################################################################################
 #############################################################################################
 # Not in merge, dedup,  or final stage, i.e. need to split and align files.
 #############################################################################################
 #############################################################################################
+
+
+
+
+
 
 # Not in final, dedup, or postproc
 if [ -z $final ] && [ -z $dedup ] && [ -z $postproc ] && [ -z $afterdedup ]
